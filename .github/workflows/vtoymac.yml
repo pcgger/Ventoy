@@ -23,6 +23,8 @@ jobs:
           file build/VtoyMac.kext/Contents/MacOS/VtoyMac
           otool -l build/VtoyMac.kext/Contents/MacOS/VtoyMac | grep -A3 LC_BUILD_VERSION || true
           nm -u build/VtoyMac.kext/Contents/MacOS/VtoyMac
+          # OpenCore (and the kernel) need _kmod_info; without it injection fails with "Invalid Parameter"
+          nm build/VtoyMac.kext/Contents/MacOS/VtoyMac | grep -E ' [DS] _kmod_info$'
           plutil -lint build/VtoyMac.kext/Contents/Info.plist
           # which kernel libraries the binary needs, and any symbol nothing exports (must be none)
           # (kextlibs cannot see the kernel collection since macOS 11; kmutil can)

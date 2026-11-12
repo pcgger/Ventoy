@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>VtoyMac</string>
+	<key>CFBundleIdentifier</key>
+	<string>net.ventoy.VtoyMac</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>VtoyMac</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1.0.0</string>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<key>VtoyMac</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>net.ventoy.VtoyMac</string>
+			<key>IOClass</key>
+			<string>net_ventoy_VtoyMac</string>
+			<key>IOProviderClass</key>
+			<string>IOMedia</string>
+			<key>IOPropertyMatch</key>
+			<dict>
+				<key>Whole</key>
+				<true/>
+			</dict>
+			<key>IOProbeScore</key>
+			<integer>60000</integer>
+		</dict>
+	</dict>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.iokit.IOStorageFamily</key>
+		<string>1.0</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>12.0</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>12.0</string>
+	</dict>
+	<key>OSBundleRequired</key>
+	<string>Root</string>
+</dict>
+</plist>

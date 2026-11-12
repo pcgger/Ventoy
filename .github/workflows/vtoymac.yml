@@ -1,0 +1,48 @@
+name: VtoyMac kext
+
+on:
+  push:
+    branches: ['**']   # without this, a push filter that lists tags only fires on tag pushes
+    paths: ['MacOS/**', '.github/workflows/vtoymac.yml']
+    tags: ['vtoymac-*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15-intel   # x86_64 host: native kextlibs check against the Intel kernel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build kext
+        working-directory: MacOS/VtoyMac
+        run: |
+          xcodebuild -version
+          make
+          file build/VtoyMac.kext/Contents/MacOS/VtoyMac
+          otool -l build/VtoyMac.kext/Contents/MacOS/VtoyMac | grep -A3 LC_BUILD_VERSION || true
+          nm -u build/VtoyMac.kext/Contents/MacOS/VtoyMac
+          plutil -lint build/VtoyMac.kext/Contents/Info.plist
+          # which kernel libraries the binary needs, and any symbol nothing exports (must be none)
+          # (kextlibs cannot see the kernel collection since macOS 11; kmutil can)
+          kmutil libraries -p build/VtoyMac.kext --undef-symbols --xml || kmutil libraries -p build/VtoyMac.kext --undef-symbols
+      - name: Build SSDT
+        run: |
+          brew install acpica
+          iasl -va MacOS/ACPI/SSDT-5820.dsl
+          ls -l MacOS/ACPI/SSDT-5820.aml
+      - name: Package
+        run: |
+          mkdir -p out
+          ditto -c -k --keepParent MacOS/VtoyMac/build/VtoyMac.kext out/VtoyMac.kext.zip
+          cp MacOS/ACPI/SSDT-5820.aml out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VtoyMac
+          path: out/
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/vtoymac-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/* --title "$GITHUB_REF_NAME" --notes "VtoyMac kext + SSDT-5820 build"

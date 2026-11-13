@@ -19,6 +19,10 @@
  *     written by OpenCore (NVRAM -> Add), generated on Windows by
  *     tools/vtoy-map.ps1 (single-extent files only).
  *
+ *  3. boot-args  vtoysig=<MBR signature> vtoylba=<first sector> vtoysize=<bytes>
+ *     (OpenCore NVRAM boot-args; readable from the start of the kernel, single extent only).
+ *     On the Dell 5820 neither NVRAM variable was visible when the disk was probed, hence this.
+ *
  * Every candidate is validated (disk identity + GPT header inside the image)
  * before anything is published; on any mismatch the kext declines and the
  * normal partition scheme drivers handle the disk.
@@ -111,6 +115,7 @@ class net_ventoy_VtoyMac : public IOPartitionScheme {
     bool readImage(IOMedia *media, UInt64 offset, void *dst, UInt32 len);
     bool matchFromOsParam(IOMedia *media, const uint8_t *sector0);
     bool matchFromMap(IOMedia *media, const uint8_t *sector0);
+    bool matchFromBootArgs(IOMedia *media, const uint8_t *sector0);
     bool validateImage(IOMedia *media, const uint8_t *expectGuid);
     void doIO(bool write, IOService *client, UInt64 byteStart, IOMemoryDescriptor *buffer,
               IOStorageAttributes *attributes, IOStorageCompletion *completion);

@@ -3,7 +3,10 @@
  *  - fake EC device (macOS needs one, the board has no PNP0C09)
  *  - USBX power properties
  *  - enable legacy RTC instead of AWAC (STAS = 1) for Darwin
- * CPU objects are ACPI0007 devices: use the stock SSDT-PLUG-ALT alongside this table.
+ * CPUs: the DSDT already declares 56 Processor() objects (\_SB.SCK0.CPxx, each with _HID ACPI0007),
+ * 20 of them enabled in the MADT. Do NOT add SSDT-PLUG-ALT: its 64 extra Processor objects (IDs 0-63)
+ * collide with the real ones and macOS hangs at "AppleACPICPU: ProcessorId=". No plugin-type SSDT is
+ * needed either - macOS 12.3+ enables XCPM without it.
  */
 DefinitionBlock ("", "SSDT", 2, "VTOY", "P5820", 0x00001000)
 {

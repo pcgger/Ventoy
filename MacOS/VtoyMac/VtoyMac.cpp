@@ -20,6 +20,17 @@ static const vtoy_guid kVentoyGuid = {
 
 static constexpr UInt32 kMaxLocationTable = 16 * 1024 * 1024;
 
+/* true once the NVRAM driver (IODTNVRAM) is registered and /options can be read */
+static bool nvramReady()
+{
+    OSDictionary *m = IOService::serviceMatching("IODTNVRAM");
+    IOService *s = m ? IOService::copyMatchingService(m) : nullptr;
+    bool ready = s != nullptr;
+    OSSafeReleaseNULL(s);
+    OSSafeReleaseNULL(m);
+    return ready;
+}
+
 static OSData *copyNvram(const char *key)
 {
     IORegistryEntry *opts = IORegistryEntry::fromPath("/options", gIODTPlane);
@@ -327,6 +338,51 @@ bool net_ventoy_VtoyMac::matchFromMap(IOMedia *media, const uint8_t *sector0)
     return matched;
 }
 
+/*
+ * Third source: boot-args written by OpenCore (NVRAM boot-args), available from the very first instruction of
+ * the kernel - no IODTNVRAM involved:  vtoysig=<MBR signature> vtoylba=<first sector> vtoysize=<data bytes>
+ * Single extent only (the file must be contiguous, see tools/vtoy-contig.ps1).
+ */
+bool net_ventoy_VtoyMac::matchFromBootArgs(IOMedia *media, const uint8_t *sector0)
+{
+    UInt64 lba = 0, bytes = 0;
+    UInt32 sig = 0;
+    if (!PE_parse_boot_argn("vtoylba", &lba, sizeof(lba)) || !PE_parse_boot_argn("vtoysize", &bytes, sizeof(bytes)) ||
+        !PE_parse_boot_argn("vtoysig", &sig, sizeof(sig))) {
+        return false;
+    }
+    if (OSReadLittleInt32(sector0, 0x1B8) != sig) {
+        return false; /* another disk */
+    }
+    bytes &= ~511ULL;
+    if (bytes < 1024 * 1024 || lba * 512ULL + bytes > media->getSize()) {
+        VTOY_LOG("boot-args vtoylba/vtoysize outside the disk");
+        return false;
+    }
+    bool matched = false;
+    do {
+        if (!addExtent(0, lba * 512ULL, bytes)) {
+            break;
+        }
+        _size = bytes;
+        if (!validateImage(media, nullptr)) {
+            break;
+        }
+        /* the GPT inside must describe exactly this image: backup header at the last sector */
+        uint8_t lba1[512];
+        if (!readImage(media, 512, lba1, sizeof(lba1)) || OSReadLittleInt64(lba1, 32) != bytes / 512 - 1) {
+            VTOY_LOG("GPT inside the image does not end at vtoysize (stale boot-args?)");
+            break;
+        }
+        strlcpy(_source, "boot-args", sizeof(_source));
+        matched = true;
+    } while (false);
+    if (!matched) {
+        resetExtents();
+    }
+    return matched;
+}
+
 /* ------------------------------------------------------------ IOService */
 
 IOService *net_ventoy_VtoyMac::probe(IOService *provider, SInt32 *score)
@@ -347,7 +403,17 @@ IOService *net_ventoy_VtoyMac::probe(IOService *provider, SInt32 *score)
     bool matched = false;
     uint8_t sector0[512];
     if (readDisk(media, 0, sector0, sizeof(sector0)) && sector0[510] == 0x55 && sector0[511] == 0xAA) {
-        matched = matchFromOsParam(media, sector0) || matchFromMap(media, sector0);
+        matched = matchFromOsParam(media, sector0) || matchFromMap(media, sector0) ||
+                  matchFromBootArgs(media, sector0);
+        if (!matched && !nvramReady()) {
+            /* Disks can show up before the NVRAM driver has published /options: wait for it once, retry. */
+            VTOY_LOG("waiting for NVRAM before giving up on %s", media->getName());
+            OSDictionary *m = IOService::serviceMatching("IODTNVRAM");
+            IOService *nv = m ? IOService::waitForMatchingService(m, 10ULL * 1000 * 1000 * 1000) : nullptr;
+            OSSafeReleaseNULL(nv);
+            OSSafeReleaseNULL(m);
+            matched = matchFromOsParam(media, sector0) || matchFromMap(media, sector0);
+        }
     }
     media->close(this);
 
@@ -356,7 +422,10 @@ IOService *net_ventoy_VtoyMac::probe(IOService *provider, SInt32 *score)
         if (!reported) {
             reported = true;
             OSData *a = copyNvram(VTOY_OSPARAM_VAR), *b = copyNvram(VTOYMAC_MAP_VAR);
-            VTOY_LOG("nvram: VentoyOsParam %s, vtoy-map %s", a ? "present" : "absent", b ? "present" : "absent");
+            UInt64 lba = 0;
+            VTOY_LOG("nvram %s: VentoyOsParam %s, vtoy-map %s; boot-arg vtoylba %s", nvramReady() ? "ready" : "not ready",
+                     a ? "present" : "absent", b ? "present" : "absent",
+                     PE_parse_boot_argn("vtoylba", &lba, sizeof(lba)) ? "present" : "absent");
             OSSafeReleaseNULL(a);
             OSSafeReleaseNULL(b);
         }

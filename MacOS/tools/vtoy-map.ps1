@@ -15,7 +15,9 @@ $cluster = [int64]$vol.AllocationUnitSize
 if ($disk.PartitionStyle -ne 'MBR') { throw 'Only MBR (Ventoy default) disks are supported by this script' }
 
 $ext = @(fsutil file queryextents $Path | Where-Object { $_ -match 'LCN:' })
-$runs = foreach ($l in $ext) { if ($l -match 'VCN:\s*0x([0-9a-f]+)\s+Clusters:\s*0x([0-9a-f]+)\s+LCN:\s*0x([0-9a-f]+)') { ,@([Convert]::ToInt64($matches[1],16),[Convert]::ToInt64($matches[2],16),[Convert]::ToInt64($matches[3],16)) } }
+# @(...) keeps a single run as a one-element array (PowerShell would otherwise unroll it into its 3 numbers)
+$runs = @(foreach ($l in $ext) { if ($l -match 'VCN:\s*0x([0-9a-f]+)\s+Clusters:\s*0x([0-9a-f]+)\s+LCN:\s*0x([0-9a-f]+)') { ,@([Convert]::ToInt64($matches[1],16),[Convert]::ToInt64($matches[2],16),[Convert]::ToInt64($matches[3],16)) } })
+if ($runs.Count -eq 0 -or $runs[0].Count -ne 3) { throw 'could not parse fsutil extents' }
 for ($i = 1; $i -lt $runs.Count; $i++) { if ($runs[$i][2] -ne $runs[$i-1][2] + $runs[$i-1][1]) { throw "file is fragmented ($($runs.Count) extents)" } }
 $startLba = ($part.Offset + $runs[0][2] * $cluster) / 512
 

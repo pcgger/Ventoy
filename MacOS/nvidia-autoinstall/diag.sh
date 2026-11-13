@@ -33,11 +33,13 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     echo "----- AuxKC"; ls -la /Library/KernelCollections /private/var/db/KernelExtensionManagement/AuxKC 2>&1
     echo "----- NVIDIA PCI"; ioreg -r -c IOPCIDevice -l -w0 2>/dev/null | grep -B2 -A40 '"vendor-id" = <de100000>' | grep -E 'IOPCIDevice|assigned-addresses|IOName|class-code|IOPCIResourced|pcidebug|reg"' | head -20
     echo "----- framebuffers / displays"; ioreg -lw0 2>/dev/null | grep -E '\+-o .*(NVRM|NVAccel|NVRMFB|IOFramebuffer|IODisplay|AppleDisplay|IONDRV|AGDC)' | head -40
+    echo "----- NVRM properties"; ioreg -lw0 2>/dev/null | grep -E '"(nvrm-[a-z0-9-]+|NVAccel[A-Za-z]*)" = ' | cut -c1-300 | head -80
+    echo "----- sysctl debug.nv*"; sysctl -a 2>/dev/null | grep -E '^debug\.nv' | head -30
     LIMIT=30 run pgrep -lx WindowServer
     LIMIT=30 run ls -la /Library/Logs/DiagnosticReports
     echo "----- NullMoth logs"; tail -n 20 /Library/NullMoth/*.log 2>&1
     echo "----- kernel log (nv / gsp / display)"
-    log show --last 6m --style compact --predicate 'process == "kernel" AND (eventMessage CONTAINS[c] "nv" OR eventMessage CONTAINS[c] "gsp" OR eventMessage CONTAINS[c] "framebuffer" OR eventMessage CONTAINS[c] "display" OR eventMessage CONTAINS[c] "panic")' 2>&1 | tail -n 250
+    log show --last 6m --style compact --predicate 'process == "kernel" AND (eventMessage CONTAINS[c] "nv" OR eventMessage CONTAINS[c] "gsp" OR eventMessage CONTAINS[c] "framebuffer" OR eventMessage CONTAINS[c] "display" OR eventMessage CONTAINS[c] "panic")' 2>&1 | tail -n 400
     echo "----- WindowServer log"
     log show --last 3m --style compact --predicate 'process == "WindowServer"' 2>&1 | tail -n 60
   } > "$OUT" 2>&1

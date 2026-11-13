@@ -144,7 +144,10 @@ def nvidia(cfg):
     c['Kernel']['Block'] = c['Kernel'].get('Block', []) + [{
         'Arch': 'x86_64', 'Comment': 'IONDRVSupport: NullMoth NVRMFB must own display 0', 'Enabled': True,
         'Identifier': 'com.apple.iokit.IONDRVSupport', 'MaxKernel': '', 'MinKernel': '', 'Strategy': 'Exclude'}]
-    c['UEFI']['Output']['Resolution'] = 'Max'
+    # Native resolution only without -v: a verbose console on a 4K firmware framebuffer scrolls by moving ~33 MB of
+    # VRAM per line over PCIe, which made the Dell's debug boots look frozen for many minutes (2026-11-13).
+    if '-v' not in get_args(c).split():
+        c['UEFI']['Output']['Resolution'] = 'Max'
     return c
 
 

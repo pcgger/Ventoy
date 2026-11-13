@@ -87,6 +87,14 @@ def profile(base, vmbase, name, vtoymac):
         cfg['NVRAM'].get('Delete', {}).pop('6E0A4F2B-3C1D-4E5F-9A8B-7C6D5E4F3A21', None)
     if name == 'dell-5820':
         acpi = ['SSDT-5820.aml']
+        # FADT reset register is an SMI (I/O 0xB2 <- 0x73): macOS restart stops after "launchd quiesce complete"
+        # (seen 2026-11-13). Use the PCH reset control register instead (I/O 0xCF9 <- 0x06, full reset).
+        cfg['ACPI']['Patch'] = [{
+            'Base': '', 'BaseSkip': 0, 'Comment': 'FADT reset: SMI 0xB2/0x73 -> 0xCF9/0x06', 'Count': 1,
+            'Enabled': True, 'Find': bytes.fromhex('01080000B2000000000000' + '0073'),
+            'Limit': 0, 'Mask': b'', 'OemTableId': bytes(8),
+            'Replace': bytes.fromhex('01080000F90C0000000000' + '0006'),
+            'ReplaceMask': b'', 'Skip': 0, 'TableLength': 0, 'TableSignature': b'FACP'}]
     elif name == 'vm':
         acpi = []
     else:
@@ -115,7 +123,16 @@ def profile(base, vmbase, name, vtoymac):
                                    'Enabled': True, 'Identifier': 'com.apple.driver.AppleMCEReporter',
                                    'MaxKernel': '', 'MinKernel': '', 'Strategy': 'Exclude'}]
     # NVIDIA ready (all profiles): SIP bits the driver needs, AMFI off, AMFIPass loaded
-    cfg['NVRAM']['Add']['7C436110-AB2A-4BBB-A880-FE41995C9F82']['csr-active-config'] = CSR_NV
+    # Delete first, or OpenCore keeps whatever an older config left in flash ("ignored, exists": seen on the Dell,
+    # SIP stayed on). The old hardcoded vtoy-map must go too: after the image is copied it points at stale sectors.
+    apple = '7C436110-AB2A-4BBB-A880-FE41995C9F82'
+    cfg['NVRAM']['Add'][apple]['csr-active-config'] = CSR_NV
+    cfg['NVRAM']['Add'].pop('6E0A4F2B-3C1D-4E5F-9A8B-7C6D5E4F3A21', None)
+    dl = cfg['NVRAM'].setdefault('Delete', {})
+    dl.setdefault(apple, [])
+    if 'csr-active-config' not in dl[apple]:
+        dl[apple].append('csr-active-config')
+    dl['6E0A4F2B-3C1D-4E5F-9A8B-7C6D5E4F3A21'] = ['vtoy-map']
     args = f'{args} {AMFI_ARGS} @VTOYARGS@'
     set_args(cfg, args)
     return cfg

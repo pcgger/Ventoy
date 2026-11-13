@@ -183,6 +183,12 @@ static void identify(Ident *id)
 static int physical_cores(void)
 {
     uint32_t r[4];
+    cpuid(0, 0, r);
+    if (r[1] == 0x756E6547 && r[0] >= 0xB) {  /* "Genu"ineIntel: leaf 0xB, SMT level / core level */
+        cpuid(0xB, 0, r); uint32_t smt = r[1] & 0xFFFF;
+        cpuid(0xB, 1, r); uint32_t pkg = r[1] & 0xFFFF;
+        if (smt && pkg) return (int)(pkg / smt);
+    }
     cpuid(0x80000000, 0, r);
     if (r[0] < 0x80000008) return 0;
     cpuid(0x80000008, 0, r);
@@ -252,8 +258,37 @@ typedef struct {
 #pragma pack()
 _Static_assert(sizeof(VtoyOsParam) == 512, "os_param size");
 
+/* Ventoy's image location table */
+#pragma pack(1)
+typedef struct { uint32_t img_count, img_start; uint64_t disk_start; } VtoyRegion;
+typedef struct { EFI_GUID guid; uint32_t img_sec, disk_sec, count; VtoyRegion r[1]; } VtoyLocation;
+#pragma pack()
+
+/*
+ * Single-extent images also get "vtoysig=0x.. vtoylba=.. vtoysize=..": VtoyMac's boot-args source, proven on bare
+ * metal and computed fresh on every boot (never stale). Fixed-VHD footer excluded from the size.
+ */
+static void ventoy_legacy_args(const VtoyOsParam *prm, Buf *args)
+{
+    const VtoyLocation *loc = (const VtoyLocation *)(UINTN)prm->loc_addr;
+    if (loc->count != 1 || loc->r[0].img_start != 0 || loc->disk_sec != 512) {
+        buf_str(&gLog, "ventoy: multi-extent image, no vtoylba args\n");
+        return;
+    }
+    uint64_t bytes = (uint64_t)loc->r[0].img_count * loc->img_sec;
+    if (bytes > prm->img_size) bytes = prm->img_size;
+    /* a fixed VHD ends in a 512-byte footer that is not disk data */
+    if (contains(prm->img_path, ".vhd.vtoy", 9)) bytes -= 512;
+    bytes &= ~511ULL;
+    uint32_t sig = (uint32_t)prm->disk_sig[0] | (uint32_t)prm->disk_sig[1] << 8 | (uint32_t)prm->disk_sig[2] << 16 |
+                   (uint32_t)prm->disk_sig[3] << 24;
+    buf_str(args, " vtoysig="); buf_hex(args, sig);
+    buf_str(args, " vtoylba="); buf_dec(args, loc->r[0].disk_start);
+    buf_str(args, " vtoysize="); buf_dec(args, bytes);
+}
+
 /* returns physical address of the NVS copy of os_param (+ table), or 0 */
-static uint64_t ventoy_handoff(void)
+static uint64_t ventoy_handoff(Buf *legacy)
 {
     VtoyOsParam prm; UINTN sz = sizeof(prm); uint32_t attr = 0;
     EFI_STATUS st = ST->RuntimeServices->GetVariable(L"VentoyOsParam", (EFI_GUID *)&gVentoyGuid, &attr, &sz, &prm);
@@ -268,6 +303,7 @@ static uint64_t ventoy_handoff(void)
     buf_dec(&gLog, prm.img_size); buf_str(&gLog, " table "); buf_hex(&gLog, prm.loc_addr); buf_str(&gLog, " len ");
     buf_dec(&gLog, prm.loc_len); buf_str(&gLog, "\n");
     if (!prm.loc_addr || prm.loc_len < 44 || prm.loc_len > 16 * 1024 * 1024) { buf_str(&gLog, "ventoy: no table\n"); return 0; }
+    ventoy_legacy_args(&prm, legacy);
 
     UINTN bytes = 4096 + prm.loc_len, pages = (bytes + 4095) / 4096;
     EFI_PHYSICAL_ADDRESS mem = 0xFFFFFFFF;  /* below 4 GB */
@@ -369,8 +405,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab)
         buf_str(&gLog, "profile: none matched, keeping existing config.plist\n");
     } else {
         Buf args = {0};
-        uint64_t prm = ventoy_handoff();
+        Buf legacy = {0};
+        uint64_t prm = ventoy_handoff(&legacy);
         if (prm) { buf_str(&args, "vtoyparam="); buf_hex(&args, prm); }
+        if (legacy.len) buf_put(&args, legacy.p, legacy.len);
         int nv = file_exists("\\EFI\\VTOY\\nvidia-installed");
         char tpath[160] = "\\EFI\\VTOY\\profiles\\";
         size_t tl = slen(tpath);

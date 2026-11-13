@@ -11,8 +11,11 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    runs-on: macos-15-intel   # x86_64 host: native kextlibs check against the Intel kernel
+  kext:
+    # Apple-silicon runner cross-compiling for x86_64 (Intel runners queue for a long time).
+    # The kernel dependency check (kmutil libraries) was done once on macos-15-intel: IOStorageFamily,
+    # kpi.iokit, kpi.libkern - re-run it there when adding new kernel APIs.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Build kext
@@ -21,34 +24,42 @@ jobs:
           xcodebuild -version
           make
           file build/VtoyMac.kext/Contents/MacOS/VtoyMac
-          otool -l build/VtoyMac.kext/Contents/MacOS/VtoyMac | grep -A3 LC_BUILD_VERSION || true
           nm -u build/VtoyMac.kext/Contents/MacOS/VtoyMac
+          plutil -lint build/VtoyMac.kext/Contents/Info.plist
           # OpenCore (and the kernel) need _kmod_info; without it injection fails with "Invalid Parameter"
           nm build/VtoyMac.kext/Contents/MacOS/VtoyMac | grep -E ' [DS] _kmod_info$'
-          plutil -lint build/VtoyMac.kext/Contents/Info.plist
-          # which kernel libraries the binary needs, and any symbol nothing exports (must be none)
-          # (kextlibs cannot see the kernel collection since macOS 11; kmutil can)
-          kmutil libraries -p build/VtoyMac.kext --undef-symbols --xml || kmutil libraries -p build/VtoyMac.kext --undef-symbols
-      - name: Apple partition scheme personalities (for IOMatchCategory / probe scores)
-        run: |
-          plutil -convert json -o - /System/Library/Extensions/IOStorageFamily.kext/Contents/Info.plist | \
-            python3 -c 'import json,sys; p=json.load(sys.stdin)["IOKitPersonalities"]; [print(k, {x: v[x] for x in v if x in ("IOMatchCategory","IOProbeScore","IOPropertyMatch","Content Mask","IOClass","IOProviderClass")}) for k, v in p.items()]' || true
-      - name: Build SSDT
-        run: |
-          brew install acpica
-          iasl -va MacOS/ACPI/SSDT-5820.dsl
-          ls -l MacOS/ACPI/SSDT-5820.aml
       - name: Package
         run: |
           mkdir -p out
           ditto -c -k --keepParent MacOS/VtoyMac/build/VtoyMac.kext out/VtoyMac.kext.zip
-          cp MacOS/ACPI/SSDT-5820.aml out/
       - uses: actions/upload-artifact@v4
         with:
-          name: VtoyMac
+          name: VtoyMac-kext
           path: out/
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/vtoymac-')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" out/* --title "$GITHUB_REF_NAME" --notes "VtoyMac kext + SSDT-5820 build"
+
+  efi:
+    # VtoyBoot (UEFI app) and the SSDTs need no Mac.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld acpica-tools >/dev/null
+      - name: Build VtoyBoot
+        working-directory: MacOS/VtoyBoot
+        run: |
+          make CC=clang LD=lld-link
+          file build/VtoyBoot.efi
+          ls -l build/VtoyBoot.efi
+      - name: Build SSDTs
+        run: |
+          iasl -v
+          for f in MacOS/ACPI/*.dsl; do iasl -va "$f"; done
+          ls -l MacOS/ACPI/*.aml
+      - name: Package
+        run: |
+          mkdir -p out
+          cp MacOS/ACPI/*.aml MacOS/VtoyBoot/build/VtoyBoot.efi out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VtoyBoot-ACPI
+          path: out/

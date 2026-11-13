@@ -194,9 +194,42 @@ bool net_ventoy_VtoyMac::validateImage(IOMedia *media, const uint8_t *expectGuid
     return true;
 }
 
+/* Read physical memory (an ACPI NVS copy made by VtoyBoot, or Ventoy's own table) into a new OSData. */
+static OSData *copyPhys(UInt64 addr, UInt32 len)
+{
+    IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(addr, len, kIODirectionIn, TASK_NULL);
+    if (!md) {
+        return nullptr;
+    }
+    OSData *out = nullptr;
+    void *buf = IOMalloc(len);
+    if (buf && md->prepare() == kIOReturnSuccess) {
+        if (md->readBytes(0, buf, len) == len) {
+            out = OSData::withBytes(buf, len);
+        }
+        md->complete();
+    }
+    if (buf) {
+        IOFree(buf, len);
+    }
+    md->release();
+    return out;
+}
+
 bool net_ventoy_VtoyMac::matchFromOsParam(IOMedia *media, const uint8_t *sector0)
 {
-    OSData *d = copyNvram(VTOY_OSPARAM_VAR);
+    /* 1. VtoyBoot's copy (boot-arg vtoyparam=<phys>), works before IODTNVRAM exists; 2. the NVRAM variable */
+    UInt64 addr = 0;
+    OSData *d = nullptr;
+    if (PE_parse_boot_argn("vtoyparam", &addr, sizeof(addr)) && addr) {
+        d = copyPhys(addr, sizeof(vtoy_os_param));
+        if (!d) {
+            VTOY_LOG("cannot read vtoyparam at 0x%llx", addr);
+        }
+    }
+    if (!d) {
+        d = copyNvram(VTOY_OSPARAM_VAR);
+    }
     if (!d) {
         return false;
     }

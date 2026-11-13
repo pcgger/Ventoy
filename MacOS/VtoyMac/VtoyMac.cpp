@@ -7,6 +7,8 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOSubMemoryDescriptor.h>
+#include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOLib.h>
 #include <libkern/OSAtomic.h>
 #include <libkern/OSByteOrder.h>
@@ -397,6 +399,10 @@ IOService *net_ventoy_VtoyMac::probe(IOService *provider, SInt32 *score)
     if (PE_parse_boot_argn("-vtoymacoff", nullptr, 0)) {
         return nullptr;
     }
+    /* Never stack on our own "Ventoy VDisk": leave it to the GUID partition scheme straight away. */
+    if (OSDynamicCast(net_ventoy_VtoyMac, media->getProvider())) {
+        return nullptr;
+    }
     if (!media->open(this, 0, kIOStorageAccessReader)) {
         return nullptr;
     }
@@ -405,7 +411,9 @@ IOService *net_ventoy_VtoyMac::probe(IOService *provider, SInt32 *score)
     if (readDisk(media, 0, sector0, sizeof(sector0)) && sector0[510] == 0x55 && sector0[511] == 0xAA) {
         matched = matchFromOsParam(media, sector0) || matchFromMap(media, sector0) ||
                   matchFromBootArgs(media, sector0);
-        if (!matched && !nvramReady()) {
+        UInt64 haveArg = 0;
+        /* With boot-args configured there is nothing to wait for: other disks simply are not ours. */
+        if (!matched && !PE_parse_boot_argn("vtoylba", &haveArg, sizeof(haveArg)) && !nvramReady()) {
             /* Disks can show up before the NVRAM driver has published /options: wait for it once, retry. */
             VTOY_LOG("waiting for NVRAM before giving up on %s", media->getName());
             OSDictionary *m = IOService::serviceMatching("IODTNVRAM");
@@ -465,11 +473,76 @@ bool net_ventoy_VtoyMac::start(IOService *provider)
     _vdisk->registerService();
     registerService();
     VTOY_LOG("published Ventoy VDisk");
+
+    /* Diagnostics for verbose boot: show what attached below the VDisk after 15 s and 60 s. */
+    IOWorkLoop *wl = getWorkLoop();
+    if (wl) {
+        _dumpTimer = IOTimerEventSource::timerEventSource(
+            this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &net_ventoy_VtoyMac::dumpTimerFired));
+        if (_dumpTimer && wl->addEventSource(_dumpTimer) == kIOReturnSuccess) {
+            _dumpTimer->setTimeoutMS(15000);
+        } else {
+            OSSafeReleaseNULL(_dumpTimer);
+        }
+    }
     return true;
+}
+
+static const char *propStr(IORegistryEntry *e, const char *key, char *buf, size_t len)
+{
+    buf[0] = '\0';
+    OSObject *o = e->copyProperty(key);
+    if (OSString *s = OSDynamicCast(OSString, o)) {
+        strlcpy(buf, s->getCStringNoCopy(), len);
+    } else if (OSBoolean *b = OSDynamicCast(OSBoolean, o)) {
+        strlcpy(buf, b->isTrue() ? "yes" : "no", len);
+    } else if (o) {
+        strlcpy(buf, "<obj>", len);
+    }
+    OSSafeReleaseNULL(o);
+    return buf;
+}
+
+static void dumpTree(IORegistryEntry *e, int depth)
+{
+    char content[64], bsd[24], hint[64];
+    VTOY_LOG("tree %*s%s <%s> content=%s hint=%s bsd=%s", depth * 2, "", e->getName(),
+             e->getMetaClass()->getClassName(), propStr(e, "Content", content, sizeof(content)),
+             propStr(e, "Content Hint", hint, sizeof(hint)), propStr(e, "BSD Name", bsd, sizeof(bsd)));
+    if (depth >= 6) {
+        return;
+    }
+    OSIterator *it = e->getChildIterator(gIOServicePlane);
+    if (!it) {
+        return;
+    }
+    while (IORegistryEntry *c = OSDynamicCast(IORegistryEntry, it->getNextObject())) {
+        dumpTree(c, depth + 1);
+    }
+    it->release();
+}
+
+void net_ventoy_VtoyMac::dumpTimerFired(IOTimerEventSource *sender)
+{
+    if (!_vdisk) {
+        return;
+    }
+    VTOY_LOG("---- registry below Ventoy VDisk (dump %d) ----", _dumpCount + 1);
+    dumpTree(_vdisk, 0);
+    if (++_dumpCount < 2) {
+        sender->setTimeoutMS(45000);
+    }
 }
 
 void net_ventoy_VtoyMac::stop(IOService *provider)
 {
+    if (_dumpTimer) {
+        _dumpTimer->cancelTimeout();
+        if (IOWorkLoop *wl = getWorkLoop()) {
+            wl->removeEventSource(_dumpTimer);
+        }
+        OSSafeReleaseNULL(_dumpTimer);
+    }
     if (_vdisk) {
         _vdisk->detach(this);
     }
@@ -512,6 +585,26 @@ void splitDone(void *target, void *parameter, IOReturn status, UInt64 actualByte
         IOStorage::complete(&orig, st, act);
     }
 }
+/* Trace the first kTraceIOs requests end to end (issue + completion) in the verbose boot log. */
+constexpr SInt32 kTraceIOs = 24;
+volatile SInt32 gTraceCount = 0;
+
+struct TraceIO {
+    IOStorageCompletion orig;
+    UInt64 offset, length, disk;
+    SInt32 n;
+    bool write;
+};
+
+void traceDone(void *target, void *parameter, IOReturn status, UInt64 actualByteCount)
+{
+    TraceIO *t = (TraceIO *)target;
+    VTOY_LOG("io#%d %s done: status 0x%x actual %llu (img %llu len %llu)", t->n, t->write ? "W" : "R", status,
+             actualByteCount, t->offset, t->length);
+    IOStorageCompletion orig = t->orig;
+    IOFree(t, sizeof(*t));
+    IOStorage::complete(&orig, status, actualByteCount);
+}
 } // namespace
 
 void net_ventoy_VtoyMac::doIO(bool write, IOService *client, UInt64 byteStart, IOMemoryDescriptor *buffer,
@@ -519,6 +612,31 @@ void net_ventoy_VtoyMac::doIO(bool write, IOService *client, UInt64 byteStart, I
 {
     IOMedia *media = getProvider();
     UInt64 length = buffer->getLength();
+
+    /* first write = root volume mounted read-write */
+    static volatile SInt32 sawWrite = 0;
+    if (write && OSCompareAndSwap(0, 1, &sawWrite)) {
+        VTOY_LOG("first write on Ventoy VDisk: offset %llu len %llu", byteStart, length);
+    }
+    /* trace the first requests: issue + completion status */
+    IOStorageCompletion traced;
+    SInt32 n = OSIncrementAtomic(&gTraceCount);
+    if (n < kTraceIOs) {
+        TraceIO *t = (TraceIO *)IOMalloc(sizeof(TraceIO));
+        if (t) {
+            t->orig = *completion;
+            t->offset = byteStart;
+            t->length = length;
+            t->n = n;
+            t->write = write;
+            const VtoyExtent *te = findExtent(byteStart);
+            t->disk = te ? te->disk + (byteStart - te->img) : 0;
+            VTOY_LOG("io#%d %s img %llu len %llu -> disk %llu (prepared %d)", n, write ? "W" : "R", byteStart, length,
+                     t->disk, buffer->getLength() == length);
+            traced = {t, traceDone, nullptr};
+            completion = &traced;
+        }
+    }
 
     if (byteStart + length > _size) {
         IOStorage::complete(completion, kIOReturnBadArgument, 0);

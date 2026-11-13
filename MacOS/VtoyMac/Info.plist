@@ -28,6 +28,10 @@
 			<string>net_ventoy_VtoyMac</string>
 			<key>IOProviderClass</key>
 			<string>IOMedia</string>
+			<!-- Same category as IOGUID/IOFDisk/IOApplePartitionScheme: only the best probe score attaches to a
+			     whole disk, so the stock schemes do not also attach to the Ventoy disk next to VtoyMac. -->
+			<key>IOMatchCategory</key>
+			<string>IOStorage</string>
 			<key>IOPropertyMatch</key>
 			<dict>
 				<key>Whole</key>

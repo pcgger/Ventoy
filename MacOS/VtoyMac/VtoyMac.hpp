@@ -33,6 +33,7 @@
 
 #include <IOKit/storage/IOPartitionScheme.h>
 #include <IOKit/storage/IOMedia.h>
+#include <IOKit/IOTimerEventSource.h>
 
 #define VTOY_LOG(fmt, ...) IOLog("VtoyMac: " fmt "\n", ##__VA_ARGS__)
 
@@ -102,6 +103,8 @@ class net_ventoy_VtoyMac : public IOPartitionScheme {
     OSDeclareDefaultStructors(net_ventoy_VtoyMac)
 
     IOMedia    *_vdisk = nullptr;
+    IOTimerEventSource *_dumpTimer = nullptr;
+    int         _dumpCount = 0;
     VtoyExtent *_ext = nullptr;
     UInt32      _extCount = 0;
     UInt32      _extCap = 0;
@@ -117,6 +120,7 @@ class net_ventoy_VtoyMac : public IOPartitionScheme {
     bool matchFromMap(IOMedia *media, const uint8_t *sector0);
     bool matchFromBootArgs(IOMedia *media, const uint8_t *sector0);
     bool validateImage(IOMedia *media, const uint8_t *expectGuid);
+    void dumpTimerFired(IOTimerEventSource *sender);
     void doIO(bool write, IOService *client, UInt64 byteStart, IOMemoryDescriptor *buffer,
               IOStorageAttributes *attributes, IOStorageCompletion *completion);
 

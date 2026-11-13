@@ -29,6 +29,10 @@ jobs:
           # which kernel libraries the binary needs, and any symbol nothing exports (must be none)
           # (kextlibs cannot see the kernel collection since macOS 11; kmutil can)
           kmutil libraries -p build/VtoyMac.kext --undef-symbols --xml || kmutil libraries -p build/VtoyMac.kext --undef-symbols
+      - name: Apple partition scheme personalities (for IOMatchCategory / probe scores)
+        run: |
+          plutil -convert json -o - /System/Library/Extensions/IOStorageFamily.kext/Contents/Info.plist | \
+            python3 -c 'import json,sys; p=json.load(sys.stdin)["IOKitPersonalities"]; [print(k, {x: v[x] for x in v if x in ("IOMatchCategory","IOProbeScore","IOPropertyMatch","Content Mask","IOClass","IOProviderClass")}) for k, v in p.items()]' || true
       - name: Build SSDT
         run: |
           brew install acpica
